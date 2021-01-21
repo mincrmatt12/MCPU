@@ -74,9 +74,9 @@ add_custom_target(core ALL
 find_program(OPENOCD openocd)
 
 if (OPENOCD)
-	message(STATUS "OpenOCD found, adding flash target")
+	message(STATUS "OpenOCD found, adding upload target")
 
-	add_custom_target(flash
+	add_custom_target(upload
 		COMMAND
 			${OPENOCD} -f ${ANACONDA_ROOT}/share/openocd/scripts/board/digilent_${MCPU_FPGA_BOARD}.cfg -c "init\; pld load 0 ${CMAKE_CURRENT_BINARY_DIR}/core.bit\; exit"
 		DEPENDS
