@@ -1,4 +1,4 @@
----
+--
 geometry: margin=1in
 ---
 
@@ -19,6 +19,7 @@ can also be referred to either as "short" or by the length of the immediate.
 
 ```
       high           low
+fedcba9876543210fedcba9876543210
 |--------------|---------------|
 |rs||ro|0| opc ||rs||ro|0| opc |  short mode             "S" 
 |rs||ti|0| opc ||rs||ti|0| opc |  short mode with timm   [A]
@@ -246,7 +247,7 @@ The opcode for ALU instructions looks like `1OOOOSS` where the letters correspon
 | 1010 | and |
 | 1100 | nor |
 | 1101 | enor |
-| 1110 | nano |
+| 1110 | nand |
 
 | `SS` | Meaning |
 | --- | ------ |
