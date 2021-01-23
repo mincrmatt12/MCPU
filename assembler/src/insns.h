@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdexcept>
 
-namespace masm {
+namespace masm::insn {
 	// Various enums for tables in the ISA
 
 	namespace mov_cond {
@@ -105,15 +105,15 @@ namespace masm {
 	uint32_t build_alu_opcode(alu_op::e op, alu_sty::e style);
 	uint32_t build_mov_opcode(mov_op::e op, mov_cond::e cond);
 
-	inline uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro, uint32_t opcode) {
-		return (rs_and_rd << 12) | (ro << 8) | opcode;
-	}
-
+	uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro_or_imm, uint32_t opcode);
 	uint32_t build_imm_insn(uint32_t rd, uint32_t imm, uint32_t rs, uint32_t ro, uint32_t opcode);
-	uint32_t build_bigimm_insn(uint32_t rd, uint32_t imm, uint32_t opcode);
+	uint32_t build_bigimm_insn(uint32_t rd, uint32_t imm, uint32_t opcode); 
 	uint32_t build_mediimm_insn(uint32_t rd, uint32_t imm, uint32_t ro, uint32_t opcode);
 	uint32_t build_msmimm_insn(uint32_t rd, uint32_t imm, uint32_t FF, uint32_t ro, uint32_t opcode);
 	uint32_t build_smimm_insn(uint32_t rd, uint32_t imm, uint32_t FF, uint32_t rs, uint32_t ro, uint32_t opcode);
+
+	namespace ls {
+	};
 }
 
 #endif
