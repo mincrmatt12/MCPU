@@ -31,8 +31,6 @@ endif()
 file(GLOB_RECURSE core_verilog_srcs ${CMAKE_CURRENT_LIST_DIR}/src/*.v)
 set(              core_xdc_file ${CMAKE_CURRENT_LIST_DIR}/xdc/${MCPU_FPGA_BOARD}.xdc)
 
-message(STATUS ${core_verilog_srcs})
-
 add_custom_command(
 	OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/core.json
 	COMMAND
