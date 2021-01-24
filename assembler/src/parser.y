@@ -1,5 +1,5 @@
 %skeleton "lalr1.cc"
-%define parser_class_name {mcasm_parser}
+%define api.parser.class {mcasm_parser}
 %define api.token.constructor
 %define api.value.type variant
 %define parse.assert
@@ -13,6 +13,12 @@
 #include <string>
 #include <charconv>
 #include <insns.h>
+#include <utility>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <iostream>
+#include <iomanip>
 
 #define ENUM_SIMPLE_EXPRESSIONS(o) \
 	o(add) o(sub) o(mul) o(div) o(mod) o(lshift) o(rshift) o(neg)
@@ -23,24 +29,24 @@
 
 namespace masm::parser {
 	struct loadstore_insn {
-		using namespace masm::insn;
-
-		load_store_kind::e kind;
-		load_store_size::e size;
-		load_store_dest::e dest;
+		masm::insn::load_store_kind::e kind{};
+		masm::insn::load_store_size::e size{};
+		masm::insn::load_store_dest::e dest{};
 
 		loadstore_insn(
-			load_store_kind::e kind,
+			masm::insn::load_store_kind::e kind,
 			char dest,
-			load_store_size::e size=load_store_size::HALFWORD
-		) : kind(kind), size(size), {
+			masm::insn::load_store_size::e size=masm::insn::load_store_size::HALFWORD
+		) : kind(kind), size(size) {
 			switch (dest) {
-				case 's': dest = load_store_dest::SEXT; break;
-				case 'l': dest = load_store_dest::LOWW; break;
-				case 'h': dest = load_store_dest::HIGHW; break;
-				default:  dest = load_store_dest::ZEXT; break;
+				case 's': this->dest = masm::insn::load_store_dest::SEXT; break;
+				case 'l': this->dest = masm::insn::load_store_dest::LOWW; break;
+				case 'h': this->dest = masm::insn::load_store_dest::HIGHW; break;
+				default:  this->dest = masm::insn::load_store_dest::ZEXT; break;
 			}
 		}
+		
+		loadstore_insn() = default;
 	};
 
 #define ENUM_MOV_CONDS(o) \
@@ -56,7 +62,7 @@ namespace masm::parser {
 	o(BS, "bs", true, BS)
 
 	struct mov_insn {
-		bool is_jmp;
+		bool is_jmp = false;
 		enum c {
 #define o(n, _, __, ___) n,
 			ENUM_MOV_CONDS(o)
@@ -71,14 +77,22 @@ namespace masm::parser {
 #define o(nv, nn, _, __) if (condition == nn) this->condition = nv; else
 			ENUM_MOV_CONDS(o) {
 				// else
-				condition = UNDEFINED;
+				this->condition = UNDEFINED;
 			}
 #undef o
 		}
 
+		mov_insn() = default;
+
 		bool needs_swap(c &to) const {
-#define o(nv, _, ns, nt) if (condition == nv && ns) {to = nt; return true}; else
+#define o(nv, _, ns, nt) if (condition == nv && ns) {to = nt; return true;} else
 			ENUM_MOV_CONDS(o) return false;
+#undef o
+		}
+
+		const char * condition_string() const {
+#define o(nv, nn, _, __) if (condition == nv) {return nn;} else
+			ENUM_MOV_CONDS(o) return "undef";
 #undef o
 		}
 	};
@@ -88,7 +102,7 @@ namespace masm::parser {
 	struct labelname {
 		size_t section = 0;
 		size_t index = 0;
-	}
+	};
 
 	struct expr {
 		enum t {
@@ -114,9 +128,11 @@ namespace masm::parser {
 		template<typename ...T>
 		expr(t type, T&& ...args) : type(type), args{std::forward<T>(args)...} {}
 
-		expr(int64_t constant) explicit : type(num), constant_value(constant) {}
-		expr(const labelname &lbl) explicit : type(label), label_value(lbl) {}
-	}
+		explicit expr(int64_t constant) : type(num), constant_value(constant) {}
+		explicit expr(const labelname &lbl) : type(label), label_value(lbl) {}
+
+		expr() = default;
+	};
 
 	struct insn_arg {
 		enum m {
@@ -142,7 +158,7 @@ namespace masm::parser {
 	struct address {
 		uint32_t reg_base = 0, reg_index = 0;
 		uint8_t shift = 0;
-		expr constant;
+		expr constant = expr(0);
 	};
 
 	struct insn {
@@ -156,7 +172,7 @@ namespace masm::parser {
 
 		loadstore_insn i_ls;
 		mov_insn i_mov;
-		masm::insn::alu_op i_alu;
+		masm::insn::alu_op::e i_alu;
 		
 		address addr;
 		labelname lbl;
@@ -173,11 +189,11 @@ namespace masm::parser {
 			type(MOV), i_mov(opcode), args{std::forward<T>(args)...} {}
 		
 		template<typename ...T>
-		insn(const masm::insn::alu_op &opcode, T&& ...args) :
-			type(ALU), i_ls(opcode), args{std::forward<T>(args)...} {}
+		insn(const masm::insn::alu_op::e &opcode, T&& ...args) :
+			type(ALU), i_alu(opcode), args{std::forward<T>(args)...} {}
 
 		insn(const labelname& lbl) :
-			type(LABEL), labelname(lbl) {}
+			type(LABEL), lbl(lbl) {}
 	};
 
 	struct section {
@@ -193,22 +209,46 @@ namespace masm::parser {
 			return lbl;
 		}
 	};
+
+	struct pctx;
 }
 
 }
 
 %param {masm::parser::pctx &ctx}
+
 %code provides {
 namespace masm::parser {
 
 struct pctx {
-	const char *cursor;
+	const char *cursor, *start;
 	yy::location loc;
+	std::vector<ptrdiff_t> lineoffsets;
 	
 	std::vector<section> sections;
+
 	std::unordered_map<std::string, labelname> local_labels;
 	std::unordered_set<size_t> defined_local_labels;
 	std::unordered_map<std::string, labelname> global_labels;
+
+	std::vector<insn_arg> address_components;
+
+	void prepare_cursor(const char *newcursor) {
+		ptrdiff_t o = 0;
+		const char *lt = newcursor;
+
+		lineoffsets.clear();
+		lineoffsets.push_back(0);
+		while (*lt) {
+			if (*(lt - 1) == '\n') {
+				lineoffsets.push_back(o);
+			}
+			++o;
+			++lt;
+		}
+
+		cursor = start = newcursor;
+	}
 
 	labelname define_label(std::string name, bool by_use=false) {
 		if (sections.empty()) throw yy::mcasm_parser::syntax_error(loc, "defined label before section started");
@@ -216,6 +256,7 @@ struct pctx {
 		if (local_labels.count(name) && !defined_local_labels.count(local_labels[name].index)) {
 			labelname prev_lbl = local_labels[name];
 			defined_local_labels.insert(prev_lbl.index);
+			sections.back().instructions.emplace_back(prev_lbl); // add the label into the insns
 			return prev_lbl;
 		}
 		labelname lbl = sections.back().new_label();
@@ -274,6 +315,71 @@ struct pctx {
 		if (sections.empty()) throw yy::mcasm_parser::syntax_error(loc, "instructions before section start");
 		sections.back().instructions.emplace_back(std::move(i));
 	}
+
+	void begin_address() {
+		// If already declaring, raise error
+		if (!address_components.empty()) throw yy::mcasm_parser::syntax_error(loc, "nested addresses");
+	}
+
+	address end_address() {
+		address result;
+		bool constant_added = false;
+
+		auto t_address_components = this->address_components;
+		this->address_components.clear();
+
+		for (auto& comp : t_address_components) {
+			// If this is an expression, add it to the constant
+			if (comp.mode == insn_arg::CONSTANT) {
+				if (!constant_added) {
+					constant_added = true;
+					result.constant = std::move(comp.constant);
+				}
+				else {
+					// Otherwise, add the value with an e_add
+					result.constant = expr::make_add(std::move(result.constant), std::move(comp.constant));
+				}
+			}
+			// If this is a register, set it to the base
+			else if (comp.mode == insn_arg::REGISTER) {
+				if (result.reg_base != 0) {
+					// Can we instead use the index register?
+					if (result.reg_index == 0) {
+						result.reg_index = comp.reg;
+					}
+					else throw yy::mcasm_parser::syntax_error(loc, "too many register parts for address");
+				}
+				else {
+					result.reg_base = comp.reg;
+				}
+			}
+			else if (comp.mode == insn_arg::REGISTER_LSHIFT) {
+				// If index reg is used, throw
+				if (result.reg_index != 0) {
+					throw yy::mcasm_parser::syntax_error(loc, "too many index registers for address");
+				}
+				result.reg_index = comp.reg;
+				result.shift = comp.shift;
+			}
+			else throw yy::mcasm_parser::syntax_error(loc, "invalid address component");
+		}
+
+		return result;
+	}
+
+	void define_address_component(bool add, insn_arg&& comp) {
+		if (comp.mode == insn_arg::CONSTANT) {
+			if (!add) {
+				comp.constant = expr::make_neg(std::move(comp.constant));
+			}
+			address_components.emplace_back(std::move(comp));
+		}
+		else {
+			if (!add) throw yy::mcasm_parser::syntax_error(loc, "cannot subtract registers");
+			address_components.emplace_back(std::move(comp));
+		}
+	}
+
 };
 
 }
@@ -282,25 +388,30 @@ struct pctx {
 %token END 0
 %token LSHIFT "<<" RSHIFT ">>"
 %token ID_ORG ".org"
-%token LOADSTORE_INSN ALU_INSN MOV_INSN JMP_INSN
-%token IDENTIFIER REGISTER
-%token DEC_NUMBER HEX_NUMBER BIN_NUMBER
+%token LOADSTORE_INSN "load/store instruction" ALU_INSN "alu instruction" MOV_INSN "mov instruction" JMP_INSN "jmp instruction"
+%token IDENTIFIER "name" REGISTER "register" NUMBER "number"
 
 %type<int64_t> NUMBER
 %type<uint32_t> REGISTER
 %type<std::string> IDENTIFIER label
 %type<masm::parser::loadstore_insn> LOADSTORE_INSN
-%type<masm::insn::alu_op> ALU_INSN
+%type<masm::insn::alu_op::e> ALU_INSN
 %type<masm::parser::mov_insn> MOV_INSN JMP_INSN
 %type<masm::parser::insn> instruction
 %type<masm::parser::insn_arg> aluop2 movop addresscomponent movtarget
-%type<masm::parser::expr> expr
+%type<masm::parser::expr> expr mexpr
+%type<masm::parser::address> address
 
+%left "<<" ">>"
+%left '+' '-'
+%left '*' '/' '%'
+%right NEG
+%left '('
 
 %code
 {
 
-namespace yy {mlang_parser::symbol_type yylex(parsecontext &ctx); }
+namespace yy {mcasm_parser::symbol_type yylex(masm::parser::pctx &ctx); }
 
 #define MN   masm::parser
 #define M(x) std::move(x)
@@ -310,17 +421,18 @@ namespace yy {mlang_parser::symbol_type yylex(parsecontext &ctx); }
 
 %%
 
-object: defs;
+object: defs {ctx.end_section();};
 
 defs: defs directive
 	| defs label         { ctx.define_label($2); }
 	| defs instruction   { ctx.add_insn(M($2)); }
+	| defs error
 	| %empty
 	;
 
 label: IDENTIFIER ':' { $$ = $1; }
 
-instruction: LOADSTORE_INSN REGISTER ',' address                 { $$ = MN::insn($1, $3, $2); }
+instruction: LOADSTORE_INSN REGISTER ',' address                 { $$ = MN::insn($1, $4, $2); }
 		   | ALU_INSN REGISTER ',' REGISTER ',' aluop2           { $$ = MN::insn($1, $2, $4, $6); }
 		   | MOV_INSN REGISTER ',' movtarget                     { $$ = MN::insn($1, $2, $4); }
 		   | MOV_INSN REGISTER ',' movtarget ',' movop ',' movop { $$ = MN::insn($1, $2, $4, $6, $8); }
@@ -344,11 +456,13 @@ movop: expr     { $$ = MN::insn_arg(M($1)); }
 	 | REGISTER { $$ = MN::insn_arg($1); }
 	 ;
 
-address: '[' addresscomponents ']';
+address: '[' {ctx.begin_address();} addresscomponents ']' { $$ = ctx.end_address(); }
+	   | '[' error ']'                                    { $$ = MN::address{}; }
+	   ;
 
-addresscomponents: addresscomponent
-				 | addresscomponents '+' addresscomponent
-				 | addresscomponents '-' addresscomponent
+addresscomponents: addresscomponent                           { ctx.define_address_component(true, M($1)); }
+				 | addresscomponents '+' addresscomponent     { ctx.define_address_component(true, M($3)); }
+				 | addresscomponents '-' addresscomponent     { ctx.define_address_component(false, M($3)); }
 				 ;
 
 addresscomponent: expr                  { $$ = MN::insn_arg(M($1)); }
@@ -359,13 +473,29 @@ addresscomponent: expr                  { $$ = MN::insn_arg(M($1)); }
 directive: ".org" expr { ctx.start_section(M($2)); }
 		 ;
 
-expr: NUMBER
-	| IDENTIFIER
+expr: NUMBER        { $$ = MN::expr($1); }
+	| IDENTIFIER    { $$ = MN::expr(ctx.lookup($1)); }
+	| '(' mexpr ')' { $$ = M($2); }
+	| '(' error ')' { $$ = MN::expr{}; }
 	;
+
+mexpr: NUMBER                             { $$ = MN::expr($1); }
+	 | IDENTIFIER                         { $$ = MN::expr(ctx.lookup($1)); }
+	 | '(' mexpr ')'                      { $$ = M($2); }
+	 | '(' error ')'                      { $$ = MN::expr{}; }
+	 | mexpr '+' mexpr                    { $$ = MN::expr::make_add(M($1), M($3)); }
+	 | mexpr '-' mexpr                    { $$ = MN::expr::make_sub(M($1), M($3)); }
+	 | mexpr '*' mexpr                    { $$ = MN::expr::make_mul(M($1), M($3)); }
+	 | mexpr '/' mexpr                    { $$ = MN::expr::make_div(M($1), M($3)); }
+	 | mexpr '%' mexpr                    { $$ = MN::expr::make_mod(M($1), M($3)); }
+	 | mexpr "<<" mexpr                   { $$ = MN::expr::make_lshift(M($1), M($3)); }
+	 | mexpr ">>" mexpr                   { $$ = MN::expr::make_rshift(M($1), M($3)); }
+	 | '-' mexpr          %prec NEG       { $$ = MN::expr::make_neg(M($2)); }
+	 ;
 	  
 %%
 
-yy::mlang_parser::symbol_type yy::yylex(parsecontext& ctx) {
+yy::mcasm_parser::symbol_type yy::yylex(masm::parser::pctx& ctx) {
 	const char* anchor = ctx.cursor;
 	ctx.loc.step();
 
@@ -390,10 +520,10 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 /// LOAD/STORE
 
-"ld" ("." [slh])?   { return tk(LOADSTORE_INSN, masm::insn::load_store_kind::LOAD, (ctx.cursor - anchor == 4 ? anchor[3] : 'z')); }
-"ld.b" ("." [slh])? { return tk(LOADSTORE_INSN, masm::insn::load_store_kind::LOAD, masm::insn::load_store_size::BYTE, (ctx.cursor - anchor == 6 ? anchor[5] : 'z')); }
-"st." [lh]          { return tk(LOADSTORE_INSN, masm::insn::load_store_kind::STORE, anchor[3]); }
-"st.b." [lh]        { return tk(LOADSTORE_INSN, masm::insn::load_store_kind::STORE, masm::insn::load_store_size::BYTE, anchor[5]); }
+"ld" ("." [slh])?   { return tk(LOADSTORE_INSN, masm::parser::loadstore_insn(masm::insn::load_store_kind::LOAD, (ctx.cursor - anchor > 2 ? anchor[3] : 'z'))); }
+"ld.b" ("." [slh])? { return tk(LOADSTORE_INSN, masm::parser::loadstore_insn(masm::insn::load_store_kind::LOAD, (ctx.cursor - anchor > 4 ? anchor[5] : 'z'), masm::insn::load_store_size::BYTE)); }
+"st." [lh]          { return tk(LOADSTORE_INSN, masm::parser::loadstore_insn(masm::insn::load_store_kind::STORE, anchor[3])); }
+"st.b." [lh]        { return tk(LOADSTORE_INSN, masm::parser::loadstore_insn(masm::insn::load_store_kind::STORE, anchor[5], masm::insn::load_store_size::BYTE)); }
 
 /// ALU
 
@@ -412,29 +542,26 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 /// MOVS
 
-("mov" | "jmp") ("." [a-z][a-z][a-z]?)?  { 
+("mov" | "jmp") ("." ("s"?("lt"|"gt"|"le"|"ge")|("eq"|"ne"|"bs")))?  { 
 	if (*anchor == 'j')
-		return tk(JMP_INSN, true, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : ""));
+		return tk(JMP_INSN, masm::parser::mov_insn(true, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : std::string{})));
 	else
-		return tk(MOV_INSN, false, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : ""));
+		return tk(MOV_INSN, masm::parser::mov_insn(false, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : std::string{})));
 }
+
+// Registers
+
+"r" [0-9][0-9]?         { uint32_t v; std::from_chars(anchor + 1, ctx.cursor, v); return tk(REGISTER, v); }
 
 // Identifiers
 
 [a-zA-Z_] [a-zA-Z_0-9]* { return tk(IDENTIFIER, std::string(anchor, ctx.cursor)); }
 
-// Registers
-
-r\d\d?             { uint32_t v; std::from_chars(anchor + 1, ctx.cursor, v); return tk(REGISTER, v) }
-
 // Numbers
 
-[-]?[0-9]+         { int64_t v; std::from_chars(anchor, ctx.cursor, v); return tk(NUMBER, v); }
-[-]?0x[0-9a-fA-F]+ { int64_t v;
-					 std::from_chars(*anchor == '-' ? anchor + 3 : anchor + 2, ctx.cursor, v, 16); 
-					 return tk(NUMBER, *anchor == '-' ? -v : v);
-				   }
-0b[10]+            { int64_t v; std::from_chars(anchor + 2, ctx.cursor, v); return tk(NUMBER, v); }
+[0-9]+         { int64_t v; std::from_chars(anchor, ctx.cursor, v); return tk(NUMBER, v); }
+"0x" [0-9a-fA-F]+ { int64_t v; std::from_chars(anchor + 2, ctx.cursor, v, 16); return tk(NUMBER, v); }
+"0b" [10]+        { int64_t v; std::from_chars(anchor + 2, ctx.cursor, v, 2); return tk(NUMBER, v); }
 
 // Whitespace and ignored things
 "\000"          { return tk(END); }
@@ -449,8 +576,30 @@ r\d\d?             { uint32_t v; std::from_chars(anchor + 1, ctx.cursor, v); ret
 
 // Invalid
 
-.               { return s([](auto... s) { return mlang_parser::symbol_type(s...);}, mlang_parser::token_type(ctx.cursor[-1]&0xFF)); }
+.               { return s([](auto... s) { return mcasm_parser::symbol_type(s...);}, mcasm_parser::token_type(ctx.cursor[-1]&0xFF)); }
 
 %}
 	#undef tk
+}
+
+void yy::mcasm_parser::error(const location_type &l, const std::string &m) {
+	std::cerr << (l.begin.filename ? l.begin.filename->c_str() : "(undefined)");
+	std::cerr << ':' << l.begin.line << ':' << l.begin.column << '-' << l.end.column << ": " << m << '\n';
+
+	try {
+		const char * line = ctx.start + ctx.lineoffsets.at(l.begin.line - 1);
+		std::cerr << std::setw(6) << std::right << l.begin.line << " | ";
+		while (*line != '\n') {
+			std::cerr << *line++;
+		}
+		std::cerr << "\n         ";
+		for (size_t i = 0; i < l.begin.column - 1; ++i) {
+			std::cerr << ' ';
+		}
+		for (size_t i = 0; i < (l.end.column - l.begin.column); ++i) {
+			std::cerr << (i == 0 ? '^' : '~');
+		}
+		std::cerr << "\n";
+	}
+	catch (const std::out_of_range &e) {}
 }
