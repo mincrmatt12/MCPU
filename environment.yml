@@ -1,0 +1,23 @@
+name: mcpu-xc7
+channels:
+    - litex-hub
+dependencies:
+    - litex-hub::yosys
+    - litex-hub::symbiflow-yosys-plugins
+    - litex-hub::prjxray-tools
+    - litex-hub::prjxray-db  # note until this is updated you have to clone the entire prjxray-db in the right place
+    - litex-hub::nextpnr-xilinx
+    - litex-hub::openocd
+    - litex-hub::verilator
+    - lxml
+    - simplejson
+    - intervaltree
+    - pip
+    - pip:
+        - python-constraint
+        - pyyaml
+        - textx
+        - git+https://github.com/SymbiFlow/prjxray.git
+        - git+https://github.com/symbiflow/fasm
+        - git+https://github.com/symbiflow/xc-fasm
+
