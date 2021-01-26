@@ -3,17 +3,29 @@ set(MCPU_FPGA_CHIP xc7a100tcsg324-1 CACHE STRING "xc7 chip to route for")
 set(MCPU_FPGA_BOARD arty CACHE STRING "board")
 
 # find conda & helpers
-find_program(ANACONDA conda REQUIRED)
-find_program(JQ jq REQUIRED)
+find_program(ANACONDA conda)
+find_program(JQ jq)
 
 # find programs
-find_program(YOSYS yosys REQUIRED)
-find_program(NEXTPNR nextpnr-xilinx REQUIRED)
-find_program(XCFASM xcfasm REQUIRED)
+find_program(YOSYS yosys)
+if (NOT YOSYS)
+	message(FATAL_ERROR "Missing yosys")
+endif()
+find_program(NEXTPNR nextpnr-xilinx)
+if (NOT NEXTPNR)
+	message(FATAL_ERROR "Missing nextpnr-xilinx")
+endif()
+find_program(XCFASM xcfasm)
+if (NOT XCFASM)
+	message(FATAL_ERROR "Missing xcfasm")
+endif()
 
 # grab conda env root dir
 
 if (NOT EXISTS ${ANACONDA_ROOT})
+	if (NOT ANACONDA OR NOT JQ)
+		message(FATAL_ERROR "Anaconda root not set and we can't find conda or jq")
+	endif()
 	message(STATUS "Anaconda root not set properly, checking current environment...")
 
 	execute_process(
