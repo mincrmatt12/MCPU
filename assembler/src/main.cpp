@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include "dbg.h"
+#include "eval.h"
 
 int main(int argc, char ** argv) {
 	std::string f_data;
@@ -25,10 +26,52 @@ int main(int argc, char ** argv) {
 	pctx.loc.begin.filename = &f_name;
 	pctx.loc.end.filename = &f_name;
 
-	if (!parser.parse()) {
+	if (parser.parse()) {
 		return 1;
 	}
 
 	// DEBUG: dump insn
-	masm::dbg::dump_pctx(pctx);
+	std::cout << pctx;
+
+	masm::eval::evaluator eval;
+
+	// simplify expressions
+	for (auto& section : pctx.sections) {
+		for (auto& insn : section.instructions) {
+			switch (insn.type) {
+				case masm::parser::insn::LOADSTORE:
+					eval.simplify(insn.addr.constant);
+					[[fallthrough]];
+				case masm::parser::insn::ALU:
+				case masm::parser::insn::MOV:
+					for (auto& arg : insn.args) {
+						switch (arg.mode) {
+							case masm::parser::insn_arg::CONSTANT:
+							case masm::parser::insn_arg::REGISTER_PLUS:
+								// simplify + process
+								eval.simplify(arg.constant);
+							default:
+								break;
+						}
+					}
+					break;
+				case masm::parser::insn::DATA:
+					eval.simplify(insn.raw.low);
+					if (insn.raw.type == masm::parser::rawdata::BYTES) {
+						eval.simplify(insn.raw.high);
+					}
+				default:
+					break;
+			}
+		}
+	}
+
+	// show evaluated debug
+	std::cout << "after eval:\n" << pctx << "\n";
+	
+	// layout memory / pick opcodes
+	
+	// assemble
+	
+	// write to binary
 }

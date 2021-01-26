@@ -10,7 +10,7 @@ file(GLOB assembler_srcs src/*.cpp)
 add_executable(mcasm ${assembler_srcs} ${BISON_mcasm_yacc_OUTPUTS})
 
 set_target_properties(mcasm PROPERTIES
-	CXX_STANDARD 17
+	CXX_STANDARD 20
 )
 
 target_include_directories(mcasm PRIVATE ${CMAKE_CURRENT_BINARY_DIR} src)

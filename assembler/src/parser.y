@@ -19,9 +19,10 @@
 #include <vector>
 #include <iostream>
 #include <iomanip>
+#include <list>
 
 #define ENUM_SIMPLE_EXPRESSIONS(o) \
-	o(add) o(sub) o(mul) o(div) o(mod) o(lshift) o(rshift) o(neg)
+	o(add) o(mul) o(div) o(mod) o(lshift) o(rshift) o(neg)
 
 #define ENUM_EXPRESSIONS(o) \
 	ENUM_SIMPLE_EXPRESSIONS(o) \
@@ -102,6 +103,8 @@ namespace masm::parser {
 	struct labelname {
 		size_t section = 0;
 		size_t index = 0;
+
+		auto operator<=>(const labelname& other) const = default;
 	};
 
 	struct expr {
@@ -114,7 +117,7 @@ namespace masm::parser {
 		int64_t constant_value;
 		labelname label_value;
 
-		std::vector<expr> args;
+		std::list<expr> args;
 
 #define o(n) \
 		template<typename ...T> \
@@ -132,6 +135,15 @@ namespace masm::parser {
 		explicit expr(const labelname &lbl) : type(label), label_value(lbl) {}
 
 		expr() = default;
+
+		bool is_simple() const {
+			return type == num || type == label;
+		}
+
+		template<typename ...T>
+		void replace(T&& ...args) {
+			*this = expr(std::forward<T>(args)...);
+		}
 	};
 
 	struct insn_arg {
@@ -161,12 +173,23 @@ namespace masm::parser {
 		expr constant = expr(0);
 	};
 
+	struct rawdata {
+		expr low, high;
+		enum t {
+			BYTES,
+			WORD,
+			DOUBLEWORD,
+			QUADWORD
+		} type;
+	};
+
 	struct insn {
-		enum {
+		enum t {
 			LOADSTORE,
 			MOV,
 			ALU,
 			LABEL,
+			DATA,
 			UNDEFINED = -1
 		} type = UNDEFINED;
 
@@ -177,6 +200,7 @@ namespace masm::parser {
 		address addr;
 		labelname lbl;
 		std::vector<insn_arg> args;
+		rawdata raw;
 
 		insn() = default;
 		
@@ -194,6 +218,9 @@ namespace masm::parser {
 
 		insn(const labelname& lbl) :
 			type(LABEL), lbl(lbl) {}
+
+		insn(rawdata&& rd) :
+			type(DATA), raw(std::move(rd)) {}
 	};
 
 	struct section {
@@ -232,6 +259,7 @@ struct pctx {
 	std::unordered_map<std::string, labelname> global_labels;
 
 	std::vector<insn_arg> address_components;
+	std::vector<expr> data_components;
 
 	void prepare_cursor(const char *newcursor) {
 		ptrdiff_t o = 0;
@@ -325,7 +353,7 @@ struct pctx {
 		address result;
 		bool constant_added = false;
 
-		auto t_address_components = this->address_components;
+		auto t_address_components = std::move(this->address_components);
 		this->address_components.clear();
 
 		for (auto& comp : t_address_components) {
@@ -379,7 +407,51 @@ struct pctx {
 			address_components.emplace_back(std::move(comp));
 		}
 	}
+	
+	void begin_data() {
+		// If already declaring, raise error
+		if (!data_components.empty()) throw yy::mcasm_parser::syntax_error(loc, "nested datas");
+	}
+	void define_data(expr&& component) {
+		data_components.emplace_back(std::move(component));
+	}
+	void end_data(rawdata::t kind) {
+		if (kind == rawdata::BYTES) {
+			// ensure we are still aligned to words
+			if (this->data_components.size() % 2) {
+				this->data_components.clear();
+				
+				throw yy::mcasm_parser::syntax_error(loc, "byte data is not word aligned; if you want an odd number of bytes, manually pad them with zeroes to the nearest word.");
+			}
+			
+			bool hi = false;
+			rawdata entry;
+			entry.type = kind;
 
+			for (auto& e : this->data_components) {
+				if (!hi) {
+					entry.low = std::move(e);
+					hi = true;
+				}
+				else {
+					entry.high = std::move(e);
+					hi = false;
+					add_insn(insn{rawdata{entry}});
+				}
+			}
+		}
+		else {
+			for (auto& e : this->data_components) {
+				add_insn(insn{rawdata{
+					.low = std::move(e),
+					.high = expr{},
+					.type = kind
+				}});
+			}
+		}
+
+		this->data_components.clear();
+	}
 };
 
 }
@@ -387,7 +459,7 @@ struct pctx {
 
 %token END 0
 %token LSHIFT "<<" RSHIFT ">>"
-%token ID_ORG ".org"
+%token ID_ORG ".org" ID_BYTE ".db" ID_WORD ".dw" ID_DOUBLEWORD ".ddw" ID_QUADWORD ".dqw" ID_STRING ".str" ID_STRINGZ ".strz"
 %token LOADSTORE_INSN "load/store instruction" ALU_INSN "alu instruction" MOV_INSN "mov instruction" JMP_INSN "jmp instruction"
 %token IDENTIFIER "name" REGISTER "register" NUMBER "number"
 
@@ -471,7 +543,16 @@ addresscomponent: expr                  { $$ = MN::insn_arg(M($1)); }
 				;
 
 directive: ".org" expr { ctx.start_section(M($2)); }
+		 | ".db" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::BYTES); }
+		 | ".dw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::WORD); }
+		 | ".ddw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::DOUBLEWORD); }
+		 | ".dqw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::QUADWORD); }
 		 ;
+
+datacomponents: expr                     { ctx.define_data(M($1)); }
+			  | datacomponents ',' expr  { ctx.define_data(M($3)); }
+			  | datacomponents ',' error { ctx.define_data(MN::expr{}); }
+			  ;
 
 expr: NUMBER        { $$ = MN::expr($1); }
 	| IDENTIFIER    { $$ = MN::expr(ctx.lookup($1)); }
@@ -484,7 +565,7 @@ mexpr: NUMBER                             { $$ = MN::expr($1); }
 	 | '(' mexpr ')'                      { $$ = M($2); }
 	 | '(' error ')'                      { $$ = MN::expr{}; }
 	 | mexpr '+' mexpr                    { $$ = MN::expr::make_add(M($1), M($3)); }
-	 | mexpr '-' mexpr                    { $$ = MN::expr::make_sub(M($1), M($3)); }
+	 | mexpr '-' mexpr                    { $$ = MN::expr::make_add(M($1), MN::expr::make_neg(M($3))); }
 	 | mexpr '*' mexpr                    { $$ = MN::expr::make_mul(M($1), M($3)); }
 	 | mexpr '/' mexpr                    { $$ = MN::expr::make_div(M($1), M($3)); }
 	 | mexpr '%' mexpr                    { $$ = MN::expr::make_mod(M($1), M($3)); }
@@ -515,6 +596,10 @@ re2c:define:YYMARKER	= "re2c_marker";
 // Directives
 
 ".org"              { return tk(ID_ORG); }
+".db"               { return tk(ID_BYTE); }
+".dw"               { return tk(ID_WORD); }
+".ddw"              { return tk(ID_DOUBLEWORD); }
+".dqw"              { return tk(ID_QUADWORD); } 
 
 // Instructions
 
