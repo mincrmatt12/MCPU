@@ -12,11 +12,18 @@ find_program(NEXTPNR nextpnr-xilinx REQUIRED)
 find_program(XCFASM xcfasm REQUIRED)
 
 # grab conda env root dir
-execute_process(
-	COMMAND sh -c "${ANACONDA} info --json | ${JQ} .active_prefix -r"
-	OUTPUT_VARIABLE ANACONDA_ROOT
-	OUTPUT_STRIP_TRAILING_WHITESPACE
-)
+
+if (NOT EXISTS ${ANACONDA_ROOT})
+	message(STATUS "Anaconda root not set properly, checking current environment...")
+
+	execute_process(
+		COMMAND sh -c "${ANACONDA} info --json | ${JQ} .active_prefix -r"
+		OUTPUT_VARIABLE ANACONDA_ROOT_
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+
+	set(ANACONDA_ROOT ${ANACONDA_ROOT_} CACHE PATH "root of conda env" FORCE)
+endif()
 
 message(STATUS "Conda env root is ${ANACONDA_ROOT}")
 
