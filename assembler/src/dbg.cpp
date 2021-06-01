@@ -2,6 +2,8 @@
 #include <bitset>
 #include <ranges>
 
+bool is_error_reported_yet = false;
+
 namespace {
 	void dump(std::ostream &os, const std::ranges::range auto& obj, const char *sep) {
 		bool f = false;
@@ -124,4 +126,74 @@ std::ostream& operator<<(std::ostream& os, const masm::parser::pctx &pctx) {
 		}
 	}
 	return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const masm::layt::lctx &lctx) {
+	for (const auto& section : lctx.sections) {
+		os << "=== layed out section " << section.index << " ===\n";
+		os << "base address: " << std::hex << "0x" << section.base_address << std::dec << "\n";
+		os << "contents:\n";
+		uint32_t addr = section.base_address;
+		for (const auto& insn : section.contents) {
+			os << std::hex << std::setw(10) << addr << std::dec << std::setw(0) << ": ";
+			switch (insn.type) {
+				case masm::layt::concreteinsn::DATA:
+					os << "db{width=" << insn.d_data.type << "}, 0x" << std::hex << insn.d_data.low;
+					if (insn.d_data.type == masm::parser::rawdata::BYTES) os << ", 0x" << insn.d_data.high;
+					os << std::dec;
+					break;
+				case masm::layt::concreteinsn::INSN:
+					os << "opc=" << std::bitset<7>(insn.opcode) << ", rd=" << insn.rd;
+					switch (insn.i_subtype) {
+					case masm::layt::concreteinsn::I_SHORT:
+						os << ", rs=" << insn.rs << ", ro=" << insn.ro;
+						break;
+					case masm::layt::concreteinsn::I_TINY:
+						os << ", rs=" << insn.rs << ", imm=" << std::hex << insn.imm << std::dec;
+						break;
+					case masm::layt::concreteinsn::I_SM:
+					case masm::layt::concreteinsn::I_LONG:
+						os << ", rs=" << insn.rs;
+					case masm::layt::concreteinsn::I_MSM:
+						if (insn.i_subtype != masm::layt::concreteinsn::I_LONG) os << ", FF=" << std::bitset<2>(insn.FF);
+					case masm::layt::concreteinsn::I_MED:
+						os << ", ro=" << insn.ro;
+					case masm::layt::concreteinsn::I_BIG:
+						os << ", imm=" << std::hex << insn.imm << std::dec;
+					default:
+						break;
+					}
+					break;
+				default:
+					os << "<undef>";
+					break;
+			}
+			addr += insn.length();
+			os << "\n";
+		}
+	}
+	return os;
+}
+
+void report_error(const masm::parser::pctx& ctx, const yy::location &l, const std::string &m) {
+	std::cerr << (l.begin.filename ? l.begin.filename->c_str() : "(undefined)");
+	std::cerr << ':' << l.begin.line << ':' << l.begin.column << '-' << l.end.column << ": " << m << '\n';
+
+	try {
+		const char * line = ctx.start + ctx.lineoffsets.at(l.begin.line - 1);
+		std::cerr << std::setw(6) << std::right << l.begin.line << " | ";
+		while (*line != '\n') {
+			std::cerr << *line++;
+		}
+		std::cerr << "\n         ";
+		for (size_t i = 0; i < l.begin.column - 1; ++i) {
+			std::cerr << ' ';
+		}
+		for (size_t i = 0; i < (l.end.column - l.begin.column); ++i) {
+			std::cerr << (i == 0 ? '^' : '~');
+		}
+		std::cerr << "\n";
+	}
+	catch (const std::out_of_range &e) {}
+	is_error_reported_yet = true;
 }

@@ -105,15 +105,22 @@ namespace masm::insn {
 	uint32_t build_alu_opcode(alu_op::e op, alu_sty::e style);
 	uint32_t build_mov_opcode(mov_op::e op, mov_cond::e cond);
 
-	uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro_or_imm, uint32_t opcode);
+	// Does value fit in bits, i.e. does SEXT(value[0:bits]) == value
+	inline bool fits(uint32_t value, size_t bits) {
+		uint32_t v_shift = (value >> bits);
+		uint32_t negative = 0xffff'ffff >> bits;
+		bool top_bit = value & (1 << (bits - 1));
+
+		return (!top_bit && v_shift == 0) || (top_bit && v_shift == negative);
+	}
+
+	uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro, uint32_t opcode);
+	uint16_t build_timm_insn(uint32_t rs_and_rd, uint32_t imm, uint32_t opcode);
 	uint32_t build_imm_insn(uint32_t rd, uint32_t imm, uint32_t rs, uint32_t ro, uint32_t opcode);
 	uint32_t build_bigimm_insn(uint32_t rd, uint32_t imm, uint32_t opcode); 
 	uint32_t build_mediimm_insn(uint32_t rd, uint32_t imm, uint32_t ro, uint32_t opcode);
 	uint32_t build_msmimm_insn(uint32_t rd, uint32_t imm, uint32_t FF, uint32_t ro, uint32_t opcode);
 	uint32_t build_smimm_insn(uint32_t rd, uint32_t imm, uint32_t FF, uint32_t rs, uint32_t ro, uint32_t opcode);
-
-	namespace ls {
-	};
 }
 
 #endif

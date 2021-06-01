@@ -20,6 +20,7 @@
 #include <iostream>
 #include <iomanip>
 #include <list>
+#include "location.hh"
 
 #define ENUM_SIMPLE_EXPRESSIONS(o) \
 	o(add) o(mul) o(div) o(mod) o(lshift) o(rshift) o(neg)
@@ -51,16 +52,18 @@ namespace masm::parser {
 	};
 
 #define ENUM_MOV_CONDS(o) \
-	o(AL, "", true, AL) \
-	o(LT, "lt", true, LT) \
-	o(SLT, "slt", true, SLT) \
-	o(GT, "gt", false, LT) \
-	o(SGT, "sgt", false, SLT) \
-	o(LE, "le", false, GE) \
-	o(SLE, "sle", false, SGE) \
+	o(AL, "", false, AL) \
+	o(LT, "lt", false, LT) \
+	o(SLT, "slt", false, SLT) \
+	o(GT, "gt", true, LT) \
+	o(SGT, "sgt", true, SLT) \
+	o(LE, "le", true, GE) \
+	o(SLE, "sle", true, SGE) \
 	o(GE, "ge", true, GE) \
-	o(SGE, "sge", true, SGE) \
-	o(BS, "bs", true, BS)
+	o(SGE, "sge", false, SGE) \
+	o(EQ, "eq", false, EQ) \
+	o(NE, "ne", false, NE) \
+	o(BS, "bs", false, BS)
 
 	struct mov_insn {
 		bool is_jmp = false;
@@ -140,6 +143,10 @@ namespace masm::parser {
 			return type == num || type == label;
 		}
 
+		bool is_constant(int64_t value) const {
+			return type == num && constant_value == value;
+		}
+
 		template<typename ...T>
 		void replace(T&& ...args) {
 			*this = expr(std::forward<T>(args)...);
@@ -163,7 +170,7 @@ namespace masm::parser {
 		insn_arg() = default;
 		insn_arg(expr &&constant) : mode(CONSTANT), constant(std::move(constant)) {}
 		insn_arg(uint32_t reg) : mode(REGISTER), reg(reg) {}
-		insn_arg(uint32_t reg, expr &&constant) : mode(REGISTER_PLUS), constant(std::move(constant)) {}
+		insn_arg(uint32_t reg, expr &&constant) : mode(REGISTER_PLUS), reg(reg), constant(std::move(constant)) {}
 		insn_arg(uint32_t reg, m mode, uint8_t shift) : mode(mode), reg(reg), shift(shift) {}
 	};
 
@@ -201,6 +208,8 @@ namespace masm::parser {
 		labelname lbl;
 		std::vector<insn_arg> args;
 		rawdata raw;
+
+		yy::location progpos;
 
 		insn() = default;
 		
@@ -250,6 +259,7 @@ namespace masm::parser {
 struct pctx {
 	const char *cursor, *start;
 	yy::location loc;
+	yy::location insnpos;
 	std::vector<ptrdiff_t> lineoffsets;
 	
 	std::vector<section> sections;
@@ -338,8 +348,19 @@ struct pctx {
 		new_section.index = sections.size();
 		sections.emplace_back(std::move(new_section));
 	}
+
+	void verify_instruction(const insn& i) {
+		// verify lengths of insn args
+		if (i.type == insn::MOV && i.i_mov.condition != mov_insn::AL && i.args.size() < 3) throw yy::mcasm_parser::syntax_error(insnpos, "too few arguments for condition mov/jmp");
+		if (i.type == insn::MOV && i.i_mov.condition == mov_insn::AL && i.args.size() > 2) throw yy::mcasm_parser::syntax_error(insnpos, "too many arguments for unconditioned mov/jmp");
+	}
+
+	void start_insn() {
+		insnpos = loc;
+	}
 	
 	void add_insn(insn &&i) {
+		i.progpos = insnpos;
 		if (sections.empty()) throw yy::mcasm_parser::syntax_error(loc, "instructions before section start");
 		sections.back().instructions.emplace_back(std::move(i));
 	}
@@ -488,6 +509,7 @@ namespace yy {mcasm_parser::symbol_type yylex(masm::parser::pctx &ctx); }
 #define MN   masm::parser
 #define M(x) std::move(x)
 #define C(x) std::decay_t<decltype(x)>(x)
+#define VI(x) ctx.verify_instruction(x)
 
 }
 
@@ -496,20 +518,20 @@ namespace yy {mcasm_parser::symbol_type yylex(masm::parser::pctx &ctx); }
 object: defs {ctx.end_section();};
 
 defs: defs directive
-	| defs label         { ctx.define_label($2); }
-	| defs instruction   { ctx.add_insn(M($2)); }
+	| defs label                              { ctx.define_label($2); }
+	| defs { ctx.start_insn();} instruction   { ctx.add_insn(M($3)); }
 	| defs error
 	| %empty
 	;
 
 label: IDENTIFIER ':' { $$ = $1; }
 
-instruction: LOADSTORE_INSN REGISTER ',' address                 { $$ = MN::insn($1, $4, $2); }
-		   | ALU_INSN REGISTER ',' REGISTER ',' aluop2           { $$ = MN::insn($1, $2, $4, $6); }
-		   | MOV_INSN REGISTER ',' movtarget                     { $$ = MN::insn($1, $2, $4); }
-		   | MOV_INSN REGISTER ',' movtarget ',' movop ',' movop { $$ = MN::insn($1, $2, $4, $6, $8); }
-		   | JMP_INSN movtarget                                  { $$ = MN::insn($1, $2); }
-		   | JMP_INSN movtarget ',' movop ',' movop              { $$ = MN::insn($1, $2, $4, $6); }
+instruction: LOADSTORE_INSN REGISTER ',' address                 { $$ = MN::insn($1, $4, $2); VI($$); }
+		   | ALU_INSN REGISTER ',' REGISTER ',' aluop2           { $$ = MN::insn($1, $2, $4, $6); VI($$); }
+		   | MOV_INSN REGISTER ',' movtarget                     { $$ = MN::insn($1, $2, $4); VI($$); }
+		   | MOV_INSN REGISTER ',' movtarget ',' movop ',' movop { $$ = MN::insn($1, $2, $4, $6, $8); VI($$); }
+		   | JMP_INSN movtarget                                  { $$ = MN::insn($1, $2); VI($$); }
+		   | JMP_INSN movtarget ',' movop ',' movop              { $$ = MN::insn($1, $2, $4, $6); VI($$); }
 		   ;
 	
 aluop2: expr                    { $$ = MN::insn_arg(M($1)); }
@@ -576,6 +598,10 @@ mexpr: NUMBER                             { $$ = MN::expr($1); }
 	  
 %%
 
+#undef M
+#undef C
+#undef VI
+
 yy::mcasm_parser::symbol_type yy::yylex(masm::parser::pctx& ctx) {
 	const char* anchor = ctx.cursor;
 	ctx.loc.step();
@@ -637,6 +663,7 @@ re2c:define:YYMARKER	= "re2c_marker";
 // Registers
 
 "r" [0-9][0-9]?         { uint32_t v; std::from_chars(anchor + 1, ctx.cursor, v); return tk(REGISTER, v); }
+"pc"                    { return tk(REGISTER, 15); }
 
 // Identifiers
 
@@ -661,30 +688,15 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 // Invalid
 
-.               { return s([](auto... s) { return mcasm_parser::symbol_type(s...);}, mcasm_parser::token_type(ctx.cursor[-1]&0xFF)); }
+[+\-*/&(:,\[\])] { return s([](auto... s) { return mcasm_parser::symbol_type(s...);}, mcasm_parser::token_type(ctx.cursor[-1]&0xFF)); }
+*               { return tk(YYUNDEF); }
 
 %}
 	#undef tk
 }
 
-void yy::mcasm_parser::error(const location_type &l, const std::string &m) {
-	std::cerr << (l.begin.filename ? l.begin.filename->c_str() : "(undefined)");
-	std::cerr << ':' << l.begin.line << ':' << l.begin.column << '-' << l.end.column << ": " << m << '\n';
+extern void report_error(const masm::parser::pctx& ctx, const yy::location &l, const std::string &m);
 
-	try {
-		const char * line = ctx.start + ctx.lineoffsets.at(l.begin.line - 1);
-		std::cerr << std::setw(6) << std::right << l.begin.line << " | ";
-		while (*line != '\n') {
-			std::cerr << *line++;
-		}
-		std::cerr << "\n         ";
-		for (size_t i = 0; i < l.begin.column - 1; ++i) {
-			std::cerr << ' ';
-		}
-		for (size_t i = 0; i < (l.end.column - l.begin.column); ++i) {
-			std::cerr << (i == 0 ? '^' : '~');
-		}
-		std::cerr << "\n";
-	}
-	catch (const std::out_of_range &e) {}
+void yy::mcasm_parser::error(const location_type &l, const std::string &m) {
+	report_error(ctx, l, m);
 }

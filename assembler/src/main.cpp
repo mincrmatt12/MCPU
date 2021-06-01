@@ -4,10 +4,15 @@
 #include <fstream>
 #include "dbg.h"
 #include "eval.h"
+#include "layt.h"
+#include "assmbl.h"
+
+static constexpr inline bool DebugPrint = false;
 
 int main(int argc, char ** argv) {
 	std::string f_data;
 	std::string f_name = argv[1];
+	std::string f_out  = argv[2];
 
 	{
 		std::ifstream f_in(f_name);
@@ -26,12 +31,12 @@ int main(int argc, char ** argv) {
 	pctx.loc.begin.filename = &f_name;
 	pctx.loc.end.filename = &f_name;
 
-	if (parser.parse()) {
+	if (parser.parse() || is_error_reported_yet) {
 		return 1;
 	}
 
 	// DEBUG: dump insn
-	std::cout << pctx;
+	if (DebugPrint) std::cout << pctx;
 
 	masm::eval::evaluator eval;
 
@@ -67,11 +72,18 @@ int main(int argc, char ** argv) {
 	}
 
 	// show evaluated debug
-	std::cout << "after eval:\n" << pctx << "\n";
+	if (DebugPrint) std::cout << "after eval:\n" << pctx << "\n";
 	
 	// layout memory / pick opcodes
-	
-	// assemble
-	
+	masm::layt::lctx layout(eval);
+	// do layout
+	if (!layout.layout_from(pctx) || is_error_reported_yet) return 2;
+	if (DebugPrint) std::cout << "after layout:\n" << layout << "\n";
+
 	// write to binary
+	std::ofstream binout(f_out, std::ios::out | std::ios::binary | std::ios::trunc);
+
+	// do assembling
+	masm::assmbl::assemble(pctx, std::move(layout), binout);
+	return 0;
 }

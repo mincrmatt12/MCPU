@@ -4,7 +4,7 @@
 
 namespace masm::eval {
 	template<typename Func>
-	void evaluator::evaluate_commutative(parser::expr& expr, Func&& func) {
+	void evaluator::evaluate_commutative(parser::expr& expr, Func&& func) const {
 		auto rng = expr.args | std::views::filter([](const parser::expr& e){return e.type == parser::expr::num;});
 		// Allocate a scratch instance to add nonfinished bits
 		std::list<parser::expr> new_e{/* get first number value */
@@ -31,7 +31,7 @@ namespace masm::eval {
 	}
 
 	template<typename Func>
-	void evaluator::evaluate_noncommutative(parser::expr& expr, Func&& func) {
+	void evaluator::evaluate_noncommutative(parser::expr& expr, Func&& func) const {
 		std::list<parser::expr> new_e{std::move(expr.args.front())};
 
 		for (auto& i : expr.args | std::views::drop(1)) {
@@ -54,7 +54,7 @@ namespace masm::eval {
 		if (expr.args.size() == 1) expr = expr.args.front();
 	}
 
-	bool evaluator::evaluate(parser::expr& expr) {
+	bool evaluator::evaluate(parser::expr& expr) const {
 		// Evaluate all subexpressions so that we only have to deal with nums / labels
 		bool is_finished = true;
 		for (auto& subexpr : expr.args) is_finished = evaluate(subexpr) && is_finished;
@@ -65,7 +65,7 @@ namespace masm::eval {
 		// If this is a label and we know what the value is, sub it in.
 		if (expr.type == parser::expr::label) {
 			if (labelvalues.contains(expr.label_value)) {
-				expr = parser::expr{labelvalues[expr.label_value]}; // explicitly copy
+				expr = parser::expr{labelvalues.at(expr.label_value)}; // explicitly copy
 				return evaluate(expr);
 			}
 			// otherwise just return false
@@ -119,18 +119,18 @@ namespace masm::eval {
 		return is_finished;
 	}
 
-	bool evaluator::simplify_(parser::expr& e) {
+	bool evaluator::simplify_(parser::expr& e) const {
 		evaluate(e);
 		return simplify_eliminate(e) || simplify_flatten(e) || std::ranges::any_of(e.args, [&](auto& e){return simplify_(e);});
 	};
 
-	void evaluator::simplify(parser::expr& e) {
+	void evaluator::simplify(parser::expr& e) const {
 		while (
 			simplify_(e)
 		) {;}
 	}
 
-	bool evaluator::simplify_flatten(parser::expr& e) {
+	bool evaluator::simplify_flatten(parser::expr& e) const {
 		switch (e.type) {
 			case parser::expr::mul:
 			case parser::expr::add:

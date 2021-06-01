@@ -30,12 +30,20 @@ namespace masm::insn {
 		if (ff > 3) throw std::domain_error("ff must be 0-3");
 	}
 
-	uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro_or_imm, uint32_t opcode) {
+	uint16_t build_short_insn(uint32_t rs_and_rd, uint32_t ro, uint32_t opcode) {
 		verify_register(rs_and_rd);
-		verify_register(ro_or_imm);
+		verify_register(ro);
 		verify_opcode(opcode);
 
-		return (rs_and_rd << 12) | (ro_or_imm << 8) | opcode;
+		return (rs_and_rd << 12) | (ro << 8) | opcode;
+	}
+
+	uint16_t build_timm_insn(uint32_t rs_and_rd, uint32_t imm, uint32_t opcode) {
+		verify_register(rs_and_rd);
+		verify_opcode(opcode);
+		if (!fits(imm, 4)) throw std::domain_error("immediate in A instruction must be 4 bits or less");
+
+		return (rs_and_rd << 12) | ((imm & 0b1111) << 8) | opcode;
 	}
 
 	uint32_t build_imm_insn(uint32_t rd, uint32_t imm, uint32_t rs, uint32_t ro, uint32_t opcode) {
@@ -43,7 +51,8 @@ namespace masm::insn {
 		verify_register(rs);
 		verify_register(ro);
 		verify_opcode(opcode);
-		if (imm >> 12) throw std::domain_error("immediate in L instruction must be 10 bits or less");
+		if (!fits(imm, 12)) throw std::domain_error("immediate in L instruction must be 12 bits or less");
+		imm &= (1u << 12) - 1;
 
 		return (rd << 28) | (imm << 16) | (rs << 12) | (ro << 8) | (1 << 7) | opcode;
 	}
@@ -53,7 +62,8 @@ namespace masm::insn {
 		//verify_register(rs);
 		//verify_register(ro);
 		verify_opcode(opcode);
-		if (imm >> 20) throw std::domain_error("immediate in B instruction must be 20 bits or less");
+		if (!fits(imm, 20)) throw std::domain_error("immediate in B instruction must be 20 bits or less");
+		imm &= (1u << 20) - 1;
 
 		return (rd << 28) | (imm << 8) | (1 << 7) | opcode;
 	}
@@ -63,7 +73,8 @@ namespace masm::insn {
 		//verify_register(rs);
 		verify_register(ro);
 		verify_opcode(opcode);
-		if (imm >> 16) throw std::domain_error("immediate in M instruction must be 16 bits or less");
+		if (!fits(imm, 16)) throw std::domain_error("immediate in M instruction must be 16 bits or less");
+		imm &= (1 << 16) - 1;
 
 		return (rd << 28) | (imm << 12) | (ro << 8) | (1 << 7) | opcode;
 	}
@@ -74,7 +85,8 @@ namespace masm::insn {
 		verify_register(ro);
 		verify_ff(FF);
 		verify_opcode(opcode);
-		if (imm >> 14) throw std::domain_error("immediate in F instruction must be 14 bits or less");
+		if (!fits(imm, 14)) throw std::domain_error("immediate in F instruction must be 14 bits or less");
+		imm &= (1 << 14) - 1;
 
 		return (rd << 28) | (imm << 15) | (FF << 12) | (ro << 8) | (1 << 7) | opcode;
 	}
@@ -85,7 +97,8 @@ namespace masm::insn {
 		verify_register(ro);
 		verify_ff(FF);
 		verify_opcode(opcode);
-		if (imm >> 10) throw std::domain_error("immediate in T instruction must be 10 bits or less");
+		if (!fits(imm, 10)) throw std::domain_error("immediate in T instruction must be 10 bits or less");
+		imm &= (1 << 10) - 1;
 
 		return (rd << 28) | (imm << 18) | (FF << 16) | (rs << 12) | (ro << 8) | (1 << 7) | opcode;
 	}
