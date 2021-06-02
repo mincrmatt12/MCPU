@@ -3,6 +3,7 @@ project(mcpu)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
 enable_language(CXX)
+find_package(Corrosion REQUIRED)
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
    add_compile_options (-fdiagnostics-color=always)
@@ -12,3 +13,4 @@ endif ()
 
 add_subdirectory(core)
 add_subdirectory(assembler)
+add_subdirectory(debugger)

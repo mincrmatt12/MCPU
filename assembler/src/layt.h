@@ -332,6 +332,19 @@ namespace masm::layt {
 								currenti().i_subtype = concreteinsn::I_TINY;
 							}
 						}
+						// if jump to constant condition:
+						else if (insn.args[0].mode == parser::insn_arg::CONSTANT) {
+							// ensure other args are registesr
+							if (std::any_of(insn.args.begin() + 1, insn.args.end(), [](const auto& x){return x.mode != parser::insn_arg::REGISTER;})) {
+								throw std::domain_error("invalid use of jmp-immediate: condition args must be plain registers.");
+							}
+							currenti().opcode = insn::build_mov_opcode(insn::mov_op::MIMM, inscond);
+							currenti().i_subtype = concreteinsn::I_LONG;
+							currenti().rd = 0b1111;
+							currenti().imm = insn.args[0].constant;
+							currenti().rs = insn.args[1].reg;
+							currenti().ro = insn.args[2].reg;
+						}
 						else {
 							// otherwise try to assemble a jump:
 							//   encoding is always T

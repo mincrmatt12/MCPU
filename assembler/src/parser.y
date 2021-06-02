@@ -266,10 +266,14 @@ struct pctx {
 
 	std::unordered_map<std::string, labelname> local_labels;
 	std::unordered_set<size_t> defined_local_labels;
+	std::unordered_set<size_t> defined_global_labels;
 	std::unordered_map<std::string, labelname> global_labels;
 
 	std::vector<insn_arg> address_components;
 	std::vector<expr> data_components;
+
+	bool jumpflag = false, hereflag = false;
+	labelname jsrlabel{}, herelabel{};
 
 	void prepare_cursor(const char *newcursor) {
 		ptrdiff_t o = 0;
@@ -290,6 +294,16 @@ struct pctx {
 
 	labelname define_label(std::string name, bool by_use=false) {
 		if (sections.empty()) throw yy::mcasm_parser::syntax_error(loc, "defined label before section started");
+		// try to define a global label
+		if (global_labels.count(name)) {
+			if (defined_global_labels.contains(global_labels[name].index)) {
+				throw yy::mcasm_parser::syntax_error(loc, "multiple definitions of global label " + name);
+			}
+			labelname tgt = global_labels[name];
+			defined_global_labels.insert(tgt.index);
+			sections.back().instructions.emplace_back(tgt); // add the label into the insns
+			return tgt;
+		}
 		// if there's a label with this name defined locally, but it has never been previously set, return it
 		if (local_labels.count(name) && !defined_local_labels.count(local_labels[name].index)) {
 			labelname prev_lbl = local_labels[name];
@@ -323,7 +337,7 @@ struct pctx {
 		if (global_labels.count(name)) {
 			throw yy::mcasm_parser::syntax_error(loc, "multiple conflicting definitions for global label " + name);
 		}
-		labelname target = lookup(name); // this also handles creating the label if not already defined
+		labelname target {~0u, global_labels.size()};
 		// add target to global table
 		global_labels[name] = target;
 	}
@@ -359,15 +373,49 @@ struct pctx {
 		insnpos = loc;
 	}
 	
-	void add_insn(insn &&i) {
+	void add_insn(insn &&i, bool eff=true) {
 		i.progpos = insnpos;
 		if (sections.empty()) throw yy::mcasm_parser::syntax_error(loc, "instructions before section start");
+		if (hereflag && eff) {
+			// add a herelabel
+			sections.back().instructions.emplace_back(herelabel);
+		}
 		sections.back().instructions.emplace_back(std::move(i));
+	}
+
+	void end_insn() {
+		// emit label for jumpflag
+		if (jumpflag) {
+			jumpflag = false;
+			sections.back().instructions.emplace_back(jsrlabel);
+		}
+		// reset hereflag
+		hereflag = false;
 	}
 
 	void begin_address() {
 		// If already declaring, raise error
 		if (!address_components.empty()) throw yy::mcasm_parser::syntax_error(loc, "nested addresses");
+	}
+
+	void push_jump() {
+		// Setup a new label
+		jsrlabel = sections.back().new_label();
+		auto prevlbl = sections.back().new_label();
+		// emit label
+		add_insn(insn{prevlbl}, false);
+		// emit add
+		add_insn(insn{masm::insn::alu_op::ADD, insn_arg{14}, insn_arg{15}, insn_arg{expr::make_add(expr{jsrlabel}, expr::make_neg(expr{prevlbl}))}}, false);
+		// setup jumpflag
+		jumpflag = true;
+	}
+
+	expr make_here() {
+		if (!hereflag) {
+			herelabel = sections.back().new_label();
+			hereflag = true;
+		}
+		return expr{herelabel};
 	}
 
 	address end_address() {
@@ -450,6 +498,7 @@ struct pctx {
 			entry.type = kind;
 
 			for (auto& e : this->data_components) {
+				start_insn();
 				if (!hi) {
 					entry.low = std::move(e);
 					hi = true;
@@ -459,15 +508,18 @@ struct pctx {
 					hi = false;
 					add_insn(insn{rawdata{entry}});
 				}
+				end_insn();
 			}
 		}
 		else {
 			for (auto& e : this->data_components) {
+				start_insn();
 				add_insn(insn{rawdata{
 					.low = std::move(e),
 					.high = expr{},
 					.type = kind
 				}});
+				end_insn();
 			}
 		}
 
@@ -480,16 +532,16 @@ struct pctx {
 
 %token END 0
 %token LSHIFT "<<" RSHIFT ">>"
-%token ID_ORG ".org" ID_BYTE ".db" ID_WORD ".dw" ID_DOUBLEWORD ".ddw" ID_QUADWORD ".dqw" ID_STRING ".str" ID_STRINGZ ".strz"
-%token LOADSTORE_INSN "load/store instruction" ALU_INSN "alu instruction" MOV_INSN "mov instruction" JMP_INSN "jmp instruction"
-%token IDENTIFIER "name" REGISTER "register" NUMBER "number"
+%token ID_ORG ".org" ID_BYTE ".db" ID_WORD ".dw" ID_DOUBLEWORD ".ddw" ID_QUADWORD ".dqw" ID_STRING ".str" ID_STRINGZ ".strz" ID_GLOBAL ".global"
+%token LOADSTORE_INSN "load/store instruction" ALU_INSN "alu instruction" MOV_INSN "mov instruction" JMP_INSN "jmp instruction" CALL_INSN "call instruction" 
+%token IDENTIFIER "name" REGISTER "register" NUMBER "number" RELATIVE_QUAL "rel"
 
 %type<int64_t> NUMBER
 %type<uint32_t> REGISTER
 %type<std::string> IDENTIFIER label
 %type<masm::parser::loadstore_insn> LOADSTORE_INSN
 %type<masm::insn::alu_op::e> ALU_INSN
-%type<masm::parser::mov_insn> MOV_INSN JMP_INSN
+%type<masm::parser::mov_insn> MOV_INSN JMP_INSN CALL_INSN
 %type<masm::parser::insn> instruction
 %type<masm::parser::insn_arg> aluop2 movop addresscomponent movtarget
 %type<masm::parser::expr> expr mexpr
@@ -519,7 +571,7 @@ object: defs {ctx.end_section();};
 
 defs: defs directive
 	| defs label                              { ctx.define_label($2); }
-	| defs { ctx.start_insn();} instruction   { ctx.add_insn(M($3)); }
+	| defs { ctx.start_insn();} instruction   { ctx.add_insn(M($3)); ctx.end_insn(); }
 	| defs error
 	| %empty
 	;
@@ -532,6 +584,8 @@ instruction: LOADSTORE_INSN REGISTER ',' address                 { $$ = MN::insn
 		   | MOV_INSN REGISTER ',' movtarget ',' movop ',' movop { $$ = MN::insn($1, $2, $4, $6, $8); VI($$); }
 		   | JMP_INSN movtarget                                  { $$ = MN::insn($1, $2); VI($$); }
 		   | JMP_INSN movtarget ',' movop ',' movop              { $$ = MN::insn($1, $2, $4, $6); VI($$); }
+		   | CALL_INSN movtarget                                 { ctx.push_jump(); $$ = MN::insn($1, $2); VI($$); }
+		   | CALL_INSN movtarget ',' movop ',' movop             { ctx.push_jump(); $$ = MN::insn($1, $2, $4, $6); VI($$); }
 		   ;
 	
 aluop2: expr                    { $$ = MN::insn_arg(M($1)); }
@@ -544,6 +598,7 @@ movtarget: expr               { $$ = MN::insn_arg(M($1)); }
 		 | REGISTER           { $$ = MN::insn_arg($1); }
 		 | REGISTER '+' expr  { $$ = MN::insn_arg($1, M($3)); }
 		 | REGISTER '-' expr  { $$ = MN::insn_arg($1, MN::expr::make_neg(M($3))); }
+		 | "rel" expr         { $$ = MN::insn_arg((uint32_t)15, MN::expr::make_add(M($2), MN::expr::make_neg(ctx.make_here()))); }
 		 ;
 
 movop: expr     { $$ = MN::insn_arg(M($1)); }
@@ -552,6 +607,7 @@ movop: expr     { $$ = MN::insn_arg(M($1)); }
 
 address: '[' {ctx.begin_address();} addresscomponents ']' { $$ = ctx.end_address(); }
 	   | '[' error ']'                                    { $$ = MN::address{}; }
+	   | "rel" expr                                       { $$ = MN::address{.reg_base = 15, .reg_index = 0, .shift = 0, .constant = MN::expr::make_add(M($2), MN::expr::make_neg(ctx.make_here()))}; }
 	   ;
 
 addresscomponents: addresscomponent                           { ctx.define_address_component(true, M($1)); }
@@ -569,6 +625,7 @@ directive: ".org" expr { ctx.start_section(M($2)); }
 		 | ".dw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::WORD); }
 		 | ".ddw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::DOUBLEWORD); }
 		 | ".dqw" { ctx.begin_data(); } datacomponents { ctx.end_data(MN::rawdata::QUADWORD); }
+		 | ".global" IDENTIFIER { ctx.globalize($2); }
 		 ;
 
 datacomponents: expr                     { ctx.define_data(M($1)); }
@@ -576,14 +633,16 @@ datacomponents: expr                     { ctx.define_data(M($1)); }
 			  | datacomponents ',' error { ctx.define_data(MN::expr{}); }
 			  ;
 
-expr: NUMBER        { $$ = MN::expr($1); }
-	| IDENTIFIER    { $$ = MN::expr(ctx.lookup($1)); }
-	| '(' mexpr ')' { $$ = M($2); }
-	| '(' error ')' { $$ = MN::expr{}; }
+expr: NUMBER           { $$ = MN::expr($1); }
+	| IDENTIFIER       { $$ = MN::expr(ctx.lookup($1)); }
+	| '.'              { $$ = MN::expr(ctx.make_here()); }
+	| '(' mexpr ')'    { $$ = M($2); }
+	| '(' error ')'    { $$ = MN::expr{}; }
 	;
 
 mexpr: NUMBER                             { $$ = MN::expr($1); }
 	 | IDENTIFIER                         { $$ = MN::expr(ctx.lookup($1)); }
+	 | '.'                                { $$ = MN::expr(ctx.make_here()); }
 	 | '(' mexpr ')'                      { $$ = M($2); }
 	 | '(' error ')'                      { $$ = MN::expr{}; }
 	 | mexpr '+' mexpr                    { $$ = MN::expr::make_add(M($1), M($3)); }
@@ -622,6 +681,7 @@ re2c:define:YYMARKER	= "re2c_marker";
 // Directives
 
 ".org"              { return tk(ID_ORG); }
+".global"           { return tk(ID_GLOBAL); }
 ".db"               { return tk(ID_BYTE); }
 ".dw"               { return tk(ID_WORD); }
 ".ddw"              { return tk(ID_DOUBLEWORD); }
@@ -653,11 +713,13 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 /// MOVS
 
-("mov" | "jmp") ("." ("s"?("lt"|"gt"|"le"|"ge")|("eq"|"ne"|"bs")))?  { 
+("mov" | "jmp" | "call") ("." ("s"?("lt"|"gt"|"le"|"ge")|("eq"|"ne"|"bs")))?  { 
 	if (*anchor == 'j')
 		return tk(JMP_INSN, masm::parser::mov_insn(true, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : std::string{})));
-	else
+	else if (*anchor == 'm')
 		return tk(MOV_INSN, masm::parser::mov_insn(false, (ctx.cursor - anchor > 3 ? std::string(anchor + 4, ctx.cursor) : std::string{})));
+	else
+		return tk(CALL_INSN, masm::parser::mov_insn(true, (ctx.cursor - anchor > 4 ? std::string(anchor + 5, ctx.cursor) : std::string{})));
 }
 
 // Registers
@@ -667,6 +729,7 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 // Identifiers
 
+"rel"                   { return tk(RELATIVE_QUAL); }
 [a-zA-Z_] [a-zA-Z_0-9]* { return tk(IDENTIFIER, std::string(anchor, ctx.cursor)); }
 
 // Numbers
@@ -688,8 +751,8 @@ re2c:define:YYMARKER	= "re2c_marker";
 
 // Invalid
 
-[+\-*/&(:,\[\])] { return s([](auto... s) { return mcasm_parser::symbol_type(s...);}, mcasm_parser::token_type(ctx.cursor[-1]&0xFF)); }
-*               { return tk(YYUNDEF); }
+[+\-*/&(:,\[\])\.] { return s([](auto... s) { return mcasm_parser::symbol_type(s...);}, mcasm_parser::token_type(ctx.cursor[-1]&0xFF)); }
+*                  { return tk(YYUNDEF); }
 
 %}
 	#undef tk

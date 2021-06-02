@@ -7,7 +7,7 @@
 #include "layt.h"
 #include "assmbl.h"
 
-static constexpr inline bool DebugPrint = false;
+static constexpr inline bool DebugPrint = true;
 
 int main(int argc, char ** argv) {
 	std::string f_data;
