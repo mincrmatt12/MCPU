@@ -2,8 +2,6 @@
 #include "dbg.h"
 
 void masm::assmbl::assemble(parser::pctx& pctx, layt::lctx &&lctx, std::ostream& os) {
-	// TODO: do some sanity checks so we don't make huge files.
-	
 	auto put = [&](auto num){
 		for (int i = 0; i < sizeof(num); ++i) {
 			os.put(num & 0xff);
@@ -11,14 +9,10 @@ void masm::assmbl::assemble(parser::pctx& pctx, layt::lctx &&lctx, std::ostream&
 		}
 	};
 
-	uint32_t current_address = 0x0;
 	for (auto& section : lctx.sections) {
-		// Generate 0x00 padding 
-		while (current_address < section.base_address) {
-			os.put(0);
-			++current_address;
-		}
-
+		// Output a section header (addr+length)
+		put(section.base_address);
+		put((uint32_t)section.length());
 		// Start assembling instructions
 		for (auto& content : section.contents) {
 			try {
@@ -83,7 +77,6 @@ void masm::assmbl::assemble(parser::pctx& pctx, layt::lctx &&lctx, std::ostream&
 			catch (std::domain_error &e) {
 				::report_error(pctx, content.progpos, e.what());
 			}
-			current_address += content.length();
 		}
 	}
 }

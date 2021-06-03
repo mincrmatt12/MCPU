@@ -182,7 +182,7 @@ void report_error(const masm::parser::pctx& ctx, const yy::location &l, const st
 	try {
 		const char * line = ctx.start + ctx.lineoffsets.at(l.begin.line - 1);
 		std::cerr << std::setw(6) << std::right << l.begin.line << " | ";
-		while (*line != '\n') {
+		while (*line && *line != '\n') {
 			std::cerr << *line++;
 		}
 		std::cerr << "\n         ";

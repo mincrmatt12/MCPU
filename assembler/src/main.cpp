@@ -7,7 +7,7 @@
 #include "layt.h"
 #include "assmbl.h"
 
-static constexpr inline bool DebugPrint = true;
+static constexpr inline bool DebugPrint = false;
 
 int main(int argc, char ** argv) {
 	std::string f_data;
@@ -28,6 +28,10 @@ int main(int argc, char ** argv) {
 	auto parser = yy::mcasm_parser(pctx);
 
 	pctx.prepare_cursor(f_data.data());
+	if (pctx.lineoffsets.empty()) {
+		fprintf(stderr, "mcasm: empty input");
+		return -1;
+	}
 	pctx.loc.begin.filename = &f_name;
 	pctx.loc.end.filename = &f_name;
 

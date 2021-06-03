@@ -343,6 +343,9 @@ struct pctx {
 	}
 
 	void end_section() {
+		if (sections.size() == 0) {
+			throw yy::mcasm_parser::syntax_error(loc, "no sections defined in file");
+		}
 		// Make sure all labels were defined
 		if (sections.back().num_labels != defined_local_labels.size()) {
 			// Find the first undefined label
