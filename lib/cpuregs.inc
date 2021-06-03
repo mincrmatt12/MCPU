@@ -1,0 +1,26 @@
+#pragma once
+
+// BASE CPU REGISTERS
+
+#define _CPU_REG_BASE 0x80000000
+
+// INTERRUPT REGISTERS
+
+#define _IRQ_REG_BASE (_CPU_REG_BASE + 0x0)
+
+#define IRQ_BASE (_IRQ_REG_BASE + 0)
+#define IRQ_EN   (_IRQ_REG_BASE + 4)
+
+// TASK CONTROL REGISTERS
+
+#define _TASK_REG_BASE (_CPU_REG_BASE + 0x10)
+#define _TASK_CTX_REG_BASE (_CPU_REG_BASE + 0x100)
+
+#define TASK_ACTIVE              (_TASK_REG_BASE + 0)
+#define TASK_REG(x, y)           (_TASK_CTX_REG_BASE + x*0x40 + y*0x4)
+
+// MEMORY MAP REGISTERS
+
+#define _MEM_REG_BASE (_CPU_REG_BASE + 0x40)
+
+#define MEM_LAYOUT (_MEM_REG_BASE + 0)
