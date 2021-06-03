@@ -21,15 +21,15 @@ byte-access. Due to how the address-modes in load/store instructions works, the 
 
 ---
 
-0b10 - INT registers (internal to cpu/peripherals)
+0b10 - INT registers (internal to cpu)
 
 ---
 
-0b01 - SDRAM
+0b01 - ROM/Flash/Ram (remappable region 2)
 
 ---
 
-0b00 - ROM/Flash/Ram (remappable region)
+0b00 - ROM/Flash/Ram (remappable region 1)
 
 ----------
 ```
@@ -75,4 +75,87 @@ There are a few things of note here:
 This final instruction for returning from an interrupt is common enough that it may be prudent to define a macro to save
 typing it out all the time.
 
+## Memory layout
 
+As summarized above, the memory space is divided into 4 groups. The bottom two are remappable using the `MEM_LAYOUT` register:
+
+```
+fedcba9876543210
+|  MEM_LAYOUT  |
+            bbaa
+             | \- region 1 target (MEM_LAYOUT_R1T)
+             \--- region 2 target (MEM_LAYOUT_R2T)
+```
+
+Both values look up from:
+
+| ID | Target |
+| --- | :---- |
+| `0b00` | Internal ROM |
+| `0b01` | Internal SRAM |
+| `0b10` | External SDRAM (must be configured first) |
+
+Various peripherals (described in other documents) are mapped in the third/fourth regions. The first half-kilobyte (from 0x80000000-0x80000200) is reserved
+for CPU-internal registers, which are described in the next section.
+
+## CPU registers
+
+### Interrupt handling
+
+#### `IRQ_BASE` - `0x8000 0000`
+
+```
+fedcba9876543210fedcba9876543210
+|         IRQ_BASE             |
+iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+                               \- base address (IRQ_BASE); rw
+```
+
+The base address for interrupt handling routines. Interrupts will begin execution at `IRQ_BASE | (irq << 4)`.
+This register is shadowed, only writes to the high word will cause it to update. As a result, you should always write
+it low-first.
+
+#### `IRQ_EN` - `0x8000 0004`
+
+```
+fedcba9876543210
+|    IRQ_EN    |
+```
+
+Interrupt enable bitmask. Each bit corresponds to an interrupt, of which the MCPU implements 16.
+
+### Task contexts
+
+#### `TASK_ACTIVE` - `0x8000 0010`
+
+```
+fedcba9876543210
+| TASK_ACTIVE  |
+```
+
+Sets/checks the active task context. Writes _immediately_ change the active context, leaving the old context in such a state that it will continue at the next instruction.
+
+#### `TASK_REG_x_y` - `0x8000 0100 + x*0x40 + y*4`
+
+```
+fedcba9876543210fedcba9876543210
+|         TASK_REG             |
+rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+                               \- task register (TASK_REG); rw
+```
+
+Read/set a task register.
+
+### Memory mapping
+
+#### `MEM_LAYOUT` - `0x8000 0040`
+
+```
+fedcba9876543210
+|  MEM_LAYOUT  |
+            bbaa
+             | \- region 1 target (MEM_LAYOUT_R1T); rw
+             \--- region 2 target (MEM_LAYOUT_R2T); rw
+```
+
+Assigns the current memory mapping setup for the two remappable regions.
